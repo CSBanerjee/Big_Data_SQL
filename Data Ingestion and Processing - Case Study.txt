@@ -1,0 +1,500 @@
+--1. Add the required JAR files.:
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+--drop table grp_task_nyc_taxi_data;
+--2. Create an External Table with 
+create external table if not exists grp_task_nyc_taxi_data(
+vendorid string,
+tpep_pickup_datetime timestamp,
+tpep_dropoff_datetime timestamp,
+passenger_count int,
+trip_distance double,
+RatecodeID string,
+store_and_fwd_flag string,                   
+PULocationID string, 
+DOLocationID string,
+payment_type string,
+fare_amount double, 
+extra double, 
+mta_tax double, 
+tip_amount double, 
+tolls_amount double, 
+improvement_surcharge double, 
+total_amount double
+) 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+location'/common_folder/nyc_taxi_data/'
+tblproperties ("skip.header.line.count"="1");
+
+-- Basic Exploration on the dataset
+select * from grp_task_nyc_taxi_data;
+-- Total number of rows at first which is --1174569
+select count(*) from grp_task_nyc_taxi_data;
+
+-- Basic Data Quality Checks:
+--*********************************1. How many records ha)s each TPEP provider provided? 
+--***********Write a query that summarises the number of records of each provider.****************************************
+
+-- Explnation: As per the provided data dictionary, TPEP proviers are corresponds to vendor_id.
+-- Code:
+select vendorid,count(*) as no_records from grp_task_nyc_taxi_data
+group by vendorid;
+-- Answer:Vendor#1(Creative Mobile Technologies) has total records 527386. And vendor#2(VeriFone Inc.) has total record 647183. Hence,it
+--can be seen that vendor#2 has more data than vendor#1 
+
+--2.The data provided should be for months November and December only. 
+--Check whether the data is consistent, and if not, identify the data quality issues.
+--Mention all data quality issues in comments.
+
+select distinct mm,yy  from (
+select distinct tpep_pickup_datetime,date_format(tpep_pickup_datetime,'MMM') mm,date_format(tpep_pickup_datetime,'yyyy') yy from grp_task_nyc_taxi_data
+) a order by yy,mm;
+
+-- As per the question, the dataset supposed to be of November and December only.Hence, dataset should be belong to
+-- 2017 Nov and Dec. data. But we have from Jan - 2003 to Jan 2018 data
+
+select distinct mm,yy  from (
+select distinct tpep_dropoff_datetime,date_format(tpep_dropoff_datetime,'MMM') mm,date_format(tpep_dropoff_datetime,'yyyy') yy from grp_task_nyc_taxi_data
+) a order by yy,mm;
+
+-- Similarly for drop column, we have from 2003 Jan to 2019 data.
+--Hence, sure, there is data quality issues present in the dataset. We will be examining the data quality in the next steps.
+--But as of now let us see only 2017 November and December how much data we have.
+
+select Month_Name,count(*) from (
+select date_format(tpep_dropoff_datetime,'MMM') as Month_Name from grp_task_nyc_taxi_data
+where date_format(tpep_pickup_datetime,'yyyy')=2017 and date_format(tpep_dropoff_datetime,'yyyy')=2017
+and month(tpep_dropoff_datetime)>=11 and month(tpep_dropoff_datetime)<=12) a
+group by Month_Name;
+
+-- Hence, there are total 1174452 (594399+580052) are belongs to Nov. & Dec. of 2017. Remain row count is 117 (1174569-1174452)
+-- which is very much negligible and can be removed from the dataset.
+--*********************Note:***********************************
+select count(*) from grp_task_nyc_taxi_data
+where date_format(tpep_pickup_datetime,'MMM')='Dec'
+and date_format(tpep_pickup_datetime,'yyyy')=2017
+and day(tpep_pickup_datetime)=31;--15280
+
+
+select count(*) from grp_task_nyc_taxi_data
+where date_format(tpep_pickup_datetime,'MMM')='Dec'
+and date_format(tpep_pickup_datetime,'yyyy')=2017
+and day(tpep_pickup_datetime)=31
+and date_format(tpep_dropoff_datetime,'MMM')='Jan'
+and date_format(tpep_dropoff_datetime,'yyyy')=2018
+and day(tpep_dropoff_datetime)=1;--106
+
+--From the above sets of queries, we can see that there are 15280 entries are there where a trip started on 31st Dec.But from that
+-- there are only 106 recrods completed on Jan 1st,2018 which is a very negligible count. Since we are doing our Analysis for November
+-- December only,we can have a hard stop on 31st Dec and thus removing this 106 rows. Thus it will help to simplify the analysis
+--without making much impact.
+
+--3.Can you conclude which vendor is doing a bad job in providing the records using different columns of the dataset?
+-- Let us check by each vendors, 
+--***************************** PICK UP and DROP TIME********************************
+
+-- For drop column
+with tbl1 as
+(
+select * from grp_task_nyc_taxi_data where vendorid = 1
+),
+tbl2 as
+(
+select  mm,yy  from (
+select  tpep_dropoff_datetime,date_format(tpep_dropoff_datetime,'MMM') mm,date_format(tpep_dropoff_datetime,'yyyy') yy from 
+tbl1
+)a
+)
+select count(*) from tbl2
+where yy <> 2017 or (yy=2017 and mm not in ('Nov','Dec'));
+--- for vendor = 2
+with tbl1 as
+(
+select * from grp_task_nyc_taxi_data where vendorid = 2
+),
+tbl2 as
+(
+select  mm,yy  from (
+select  tpep_dropoff_datetime,date_format(tpep_dropoff_datetime,'MMM') mm,date_format(tpep_dropoff_datetime,'yyyy') yy from 
+tbl1
+)a
+)
+select count(*) from tbl2
+where yy <> 2017 or (yy=2017 and mm not in ('Nov','Dec'))
+
+----Similarly for pickup column:
+
+with tbl1 as
+(
+select * from grp_task_nyc_taxi_data where vendorid = 1
+),
+tbl2 as
+(
+select  mm,yy  from (
+select  tpep_pickup_datetime,date_format(tpep_pickup_datetime,'MMM') mm,date_format(tpep_pickup_datetime,'yyyy') yy from 
+tbl1
+)a
+)
+select count(*) from tbl2
+where yy <> 2017 or (yy=2017 and mm not in ('Nov','Dec'));
+--- for vendor = 2
+with tbl1 as
+(
+select * from grp_task_nyc_taxi_data where vendorid = 2
+),
+tbl2 as
+(
+select  mm,yy  from (
+select  tpep_pickup_datetime,date_format(tpep_pickup_datetime,'MMM') mm,date_format(tpep_pickup_datetime,'yyyy') yy from 
+tbl1
+)a
+)
+select count(*) from tbl2
+where yy <> 2017 or (yy=2017 and mm not in ('Nov','Dec'))
+
+--- For Pick time Vendor 1 has 0 error value but Vendor 2 has 14 error value. For drop time, Vendor 1 has 29 error value but 
+--- vendor 2 has 88 error value.
+
+
+-- check if there is row where drop time smaller then start time.
+select vendorid,count(*) as wrong_time from grp_task_nyc_taxi_data
+where tpep_pickup_datetime >tpep_dropoff_datetime
+group by vendorid;
+-- pick up time cannot be greater than drop time. Hence any such entry is an error. Vendor1 has 73 such error entries
+--**************************************PASSENGER COUNT**********************************************
+select vendorid, string(passenger_count) ps,count(string(passenger_count)) as p_count from grp_task_nyc_taxi_data
+group by  vendorid, string(passenger_count) 
+order by vendorid,ps;
+
+---For passenger_count we assume that 0 is wrong entry. Hence Vendor 1 has 6813 entries of the same and vendor 2 has
+-- 11 rows. Similarly count of passenger 8 and 9 also cannot be possible in an official way.
+-- Hence, if we consider that as a wrong entry then vendor 2 has total 4 rows (3 of 8 passenger and 1 of 9 passenger). Hence total
+--15 wrong entry vendor 2 has altogether. Hence, Vendor 1 has lot of error rows in this column
+
+----****************************TRIP DISTANCE**************************************************************:
+
+select vendorid, min(trip_distance) as t_min,max(trip_distance) as t_max from grp_task_nyc_taxi_data
+group by vendorid;
+
+--Both the vendor has trips starting from 0 to very high value in miles. Hence both of them has outlier in there entry.
+
+---******************************RATE CODE ID******************************************************************:
+select vendorid, RateCodeID,count(RateCodeID) as Rate_Code from grp_task_nyc_taxi_data
+group by vendorid,RateCodeID
+order by vendorid,RateCodeID ;
+ -- RateCode 1 to 6 are valid and 99 is invalid. Vendor 1 has 8 invalid entries and vendor 2 has 1 invalid entry only
+************************************Store_and_fwd_flag***********************************************************
+--Store_and_fwd_flag ( If a trip is  store and forward trip or not.)
+select vendorid,store_and_fwd_flag,count(store_and_fwd_flag) as store_and_fwd_flag from grp_task_nyc_taxi_data
+group by vendorid,store_and_fwd_flag
+order by vendorid,store_and_fwd_flag ;
+-- We can see that, vendor#1 have both type of trip but vendor#2 has only single type(N)
+-- ************************************PAYMENT TYPE******************************************************************:
+select vendorid,string(payment_type),count(string(store_and_fwd_flag)) as payment_type from grp_task_nyc_taxi_data
+group by vendorid,payment_type
+order by vendorid,payment_type ;
+-- Payment type in from 1 to 6 for both the vendors. Hence, there is no error in this column
+
+-- **************************************FARE AMOUNT*****************************************************************
+select vendorid, count(*) from grp_task_nyc_taxi_data
+where fare_amount<0
+group by vendorid;
+
+-- for fare_amount, vendor 2 has negative value for 558 rows which is error.
+
+-- ***************************************EXTRA**********************************************************************
+select vendorid,string(extra), count(string(abs(extra))) as extra from grp_task_nyc_taxi_data
+group by vendorid,string(extra)
+order by vendorid, extra;
+
+-- column Extra has a lot of error data with it for both Vendor 1 & 2. Extra column should be having values 0,0.5 and 1. But
+-- we have other values present too which is an error. For vendor1 total error entry (values other than 0,0.5,1) is 1823.
+-- For vendor2 total error entry is 3033.
+
+--*************************************MTA TAX*************************************************************
+select vendorid,string(mta_tax), count(string(abs(mta_tax))) as mta_tax from grp_task_nyc_taxi_data
+group by vendorid,string(mta_tax)
+order by vendorid, mta_tax;
+-- Apart from 0 and 0.5 all other are error entry for this column. Vendor 1 has 1 error and vendor2 has 547 wrong entry
+--************************************TOll AMOUNT****************************************************************
+select vendorid,count(*) from grp_task_nyc_taxi_data
+where tolls_amount <0
+group by vendorid;
+-- toll amount less than 0 is an error value and vendorid2 has 3 error entries
+--****************************************Improvement_surcharge********************************************
+select vendorid,string(Improvement_surcharge), count(string(abs(Improvement_surcharge))) as Improvement_surcharge from grp_task_nyc_taxi_data
+group by vendorid,string(Improvement_surcharge)
+order by vendorid, Improvement_surcharge;
+-- Improvement_surcharge can take only 0 and 0.3. Other values are error entry. Vendor 2 has 562 wrong entry
+--****************************************TIP AMOUNT******************************************************
+select vendorid,count(*) from grp_task_nyc_taxi_data
+where tip_amount <0
+group by vendorid;
+-- tip_amount cannot be less than 0 and thus it become an error. vendor 2 had 4 entries of negative tip_amount
+--*************************************Total Amount*********************************************************
+select vendorid,count(*) from grp_task_nyc_taxi_data
+where Total_amount <0
+group by vendorid;
+-- total_amount cannot be less than 0 and thus it become an error. vendor 2 had 558 entries of negative tip_amount
+
+--Hence, after considering the necessary columns above we can see that vendorid1 (Creative Mobile Technologies) has total of 
+--8747 error entries. However, vendorid2 ( VeriFone Inc) has 5368 error entries. The major contribution of error of vendor1 is from 
+-- Passenger Count.
+
+---From the above analysis, we can create a new table where the below mentioned filters should be applied in order to remove the 
+--error data.
+--1. Pickup and Drop time should be 2017 Nov and Dec. All Pickup time should be lesser than Drop time
+--2. As per our assumption, we will keep the passenger count between 1 to 7
+--3.RatecodeID should be in between 1 to 6
+--4.payment_type should be in between 1 to 6
+--5.fare_amount should be greater than 0
+--6.extra should be  0,0.5 and 1 only
+--7.mta_tax should be 0 and 0.5
+--8.tip_amount should be greater than 0
+--9.tolls_amount should be greater than 0
+--10.improvement_surcharge should be 0,0.3 only
+--11. total_amount should be more than 0
+
+
+--- Create a clean, ORC partitioned table:
+CREATE EXTERNAL TABLE IF NOT EXISTS partition_orc_grp_task_nyc_taxi_data(
+vendorid string,
+tpep_pickup_datetime timestamp,
+tpep_dropoff_datetime timestamp,
+passenger_count int,
+trip_distance double,
+RatecodeID string,
+store_and_fwd_flag string,                   
+PULocationID string, 
+DOLocationID string,
+payment_type string,
+fare_amount double, 
+extra double, 
+mta_tax double, 
+tip_amount double, 
+tolls_amount double, 
+improvement_surcharge double, 
+total_amount double
+) 
+PARTITIONED BY (mnth_derived int, mnth_derived_day int)
+stored as orc location '/user/hive/warehouse/chandra_shekhar_partition_ds13'
+tblproperties ("orc.compress"="SNAPPY");
+
+---insert data into the table:
+
+INSERT OVERWRITE TABLE partition_orc_grp_task_nyc_taxi_data PARTITION(mnth_derived, mnth_derived_day)
+select vendorid, tpep_pickup_datetime, tpep_dropoff_datetime, passenger_count, trip_distance, RatecodeID, store_and_fwd_flag,
+PULocationID, DOLocationID, payment_type, fare_amount, extra, mta_tax, tip_amount, tolls_amount,
+improvement_surcharge, total_amount,
+month(tpep_pickup_datetime)as mnth_derived,
+day(tpep_pickup_datetime)as mnth_derived_day
+from grp_task_nyc_taxi_data
+where year(tpep_pickup_datetime)=2017 and month(tpep_pickup_datetime) in (11,12) 
+and year(tpep_dropoff_datetime)=2017 and month(tpep_dropoff_datetime) in (11,12) 
+and unix_timestamp(tpep_pickup_datetime) < unix_timestamp(tpep_dropoff_datetime)
+and passenger_count in(1,2,3,4,5,6,7) 
+and trip_distance > 0.0 
+and RatecodeID in(1,2,3,4,5,6) 
+and payment_type in (1,2,3,4,5,6) 
+and fare_amount > 0 
+and extra in (0,0.5,1) 
+and mta_tax in(0,0.5) 
+and tip_amount>=0.0 
+and tolls_amount >= 0.0 
+and improvement_surcharge in (0,0.3) 
+and total_amount > 0;
+
+**************************************Analysis-I**********************************
+
+--basic check
+select count(*) from partition_orc_grp_task_nyc_taxi_data --1153498
+-- by filtering the error rows from the dataset, we have removed almost 2% of the data which is fine.
+
+--*******************1.Compare the overall average fare per trip for November and December************************************
+
+select date_format(tpep_pickup_datetime,'MMM') as mnth,round(avg(fare_amount),2) from partition_orc_grp_task_nyc_taxi_data
+group by date_format(tpep_pickup_datetime,'MMM') ;
+ --- The average fair trip for the moth of Nov. is 12.91. whereas for Dec. it is 12.7
+ 
+--*******************2.Explore the ‘number of passengers per trip’************************************
+-- The objective of this question is to figure out the pattern how people travel,i.e; they travel solo frequently or the travel
+-- with others
+
+select string(passenger_count) as passenger_count_per_trip,count(string(passenger_count)) as total_count
+from partition_orc_grp_task_nyc_taxi_data 
+group by string(passenger_count)
+
+-- From the above query it can be found that people tend to travel solo rather than partners. 71% of total travels(1153498) are from 
+-- solo travelers (816970).
+
+--*******************3.Which is the most preferred mode of payment?************************************
+-- In this question we have to find out the most popular method of payment
+
+select ( case when payment_type =1 then 'Credit card'
+when payment_type =2 then 'Cash'
+when payment_type = 3 then 'No charge'
+when payment_type = 4 then 'Dispute'
+when payment_type = 5 then 'Unknown'
+when payment_type = 6 then 'Voided trip' else 'aa' end) payment_type,count(*) as total_count from partition_orc_grp_task_nyc_taxi_data
+group by payment_type
+order by total_count desc;
+
+--From the above query we can see that the most preferred method is Credit card with 68% adoption rate (Total payment made 
+--779096 times out of 1153498 by credit card).
+
+--*******************4.What is the average tip paid per trip? 
+--Compare the average tip with the 25th, 50th and 75th percentiles and 
+--comment whether the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’*******************
+
+select percentile_approx(tip_amount,array(0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.75))  
+from partition_orc_grp_task_nyc_taxi_data;
+-- hence the values are: 
+--0.25 :0.000
+--0.30 :0.000
+--0.35 :0.000
+--0.40 :1.000
+--0.45 :1.150
+--0.50 :1.360
+--0.55 :1.558
+--0.60 :1.760
+--0.65 :2.000
+--0.75 :2.450
+
+select round(avg(tip_amount),3) from partition_orc_grp_task_nyc_taxi_data;
+-- And the average value is: 1.826
+--We can see that data is not equally distributed and skewed towards the higher side. Hence, mean or average and median are not same
+--Hence,average of tip_amount is not a representative statistic.
+
+--***********5.Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?**************
+
+-- We have two types of extra. rush hour and overnight charges.We have to check from total number of trips, what percent of trips
+-- are done during this two period which incurs these two special charges.
+with tbl1 as
+(
+select 'a' as a,count(*) as total_trip from partition_orc_grp_task_nyc_taxi_data
+),
+tbl2 as 
+(
+select 'a' as a,count(string(extra)) as total_count from partition_orc_grp_task_nyc_taxi_data
+where extra >0
+group by 'a'
+),
+tbl3 as
+(
+select (total_count/total_trip) as extra_applicable from (
+select aa.*,b.total_trip from tbl2 aa
+left join tbl1 b
+on aa.a = b.a) a
+)
+select * from tbl3;
+
+-- Thus we can see that 46% of total trips are during rush hour or overnight travels which incured an extra surcharge.
+
+
+***************************************Analysis-II***********************************************************
+
+--*********1.What is the correlation between the number of passengers
+--on any given trip, and the tip paid per trip? Do multiple travellers tip more compared to solo travellers?
+
+-- First let us check tip amount by payment type:
+select payment_type,sum(tip_amount) from partition_orc_grp_task_nyc_taxi_data
+group by payment_type;
+
+-- We can see that there is no tip while paying through cash.
+-- Hence, we can remove this payment type before the correaltation calculation
+
+with tbl1 as
+(
+select * from partition_orc_grp_task_nyc_taxi_data where payment_type <>2
+)
+select round(corr(passenger_count, tip_amount),2) from tbl1;
+
+--the correlation is very less and we cannot say that traveller_count does not related to tip amount
+
+--******2.Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+--Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+
+select tip_amount_bucket,no_of_tips,sum_of_tips,no_of_tips/aa fraction_by_Count,sum_of_tips/bb fraction_by_amount from (
+select tip_amount_bucket,no_of_tips,sum_of_tips,sum(no_of_tips) over (partition by a) as aa,
+sum(sum_of_tips) over ( partition by a) as bb
+from (
+
+select 'a' as a,(case when tip_amount>=0 and tip_amount<5 then "[0-5)"
+when tip_amount>=5 and tip_amount<10 then "[5-10)"
+when tip_amount>=10 and tip_amount<15 then "[10-15)"
+when tip_amount>=15 and tip_amount<20 then "[15-20)"
+else ">=20" end) tip_amount_bucket,count(*) no_of_tips,sum(tip_amount) sum_of_tips from partition_orc_grp_task_nyc_taxi_data
+group by (case when tip_amount>=0 and tip_amount<5 then "[0-5)"
+when tip_amount>=5 and tip_amount<10 then "[5-10)"
+when tip_amount>=10 and tip_amount<15 then "[10-15)"
+when tip_amount>=15 and tip_amount<20 then "[15-20)"
+else ">=20" end)
+
+)a) a;
+
+-- From the above query, we can see that tip amount bucket [0-5) has occured most of the time (92%). By monytery value, this bucket 
+-- is also most contibuting and it is contributed 66% of total amount received by tips.
+
+--**************Which month has a greater average ‘speed’ - November or December?*****************************
+with tbl1 as (
+select mnth_derived, trip_distance,((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600) as total_time 
+from partition_orc_grp_task_nyc_taxi_data),
+tbl2 as 
+(
+select (case when mnth_derived = 11 then 'Nov' else 'Dec' end) as mnth_name,round(avg(trip_distance/total_time),2) avg_speed
+ from tbl1
+group by (case when mnth_derived = 11 then 'Nov' else 'Dec' end)
+)
+select * from tbl2
+;
+
+-- from the above code we can see that, average speed for November was 10.97 mph and December was 11.07 mph. Hence 
+-- it was slight more in December by 0.10 mph
+
+---*****************Analyse the average speed of the most happening days of the year,
+--i.e. 31st December (New year’s eve) and 25th December (Christmas) and compare it with the overall average. *******
+with tbl1 as (
+select mnth_derived,mnth_derived_day, trip_distance,((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600) as total_time 
+from partition_orc_grp_task_nyc_taxi_data),
+tbl2 as 
+(
+select mnth_derived_day,round(avg(trip_distance/total_time),2) as special_avg_speed from tbl1 where mnth_derived= 12 and mnth_derived_day in (25,31)
+group by mnth_derived_day
+)
+select * from tbl2
+;
+-- From the above query, we can find that 25th Dec and 31st Dec average speeds are 15.27 mph and 13.27 mph respectively. Now let us 
+--check what is the overall average spped
+
+select round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)),2) as total_time
+from partition_orc_grp_task_nyc_taxi_data
+
+-- Overall average speed is 11.02. Hence we can see that 25th and 31st december speed is high compare to overall speed
+
+with tbl1 as (
+select mnth_derived,mnth_derived_day, trip_distance,((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600) as total_time 
+from partition_orc_grp_task_nyc_taxi_data),
+tbl2 as 
+(
+select 'a' as a,(case when mnth_derived_day=25 then '25th Dec' else '31st Dec' end) as mnth_derived_day,round(avg(trip_distance/total_time),2) as special_avg_speed from tbl1 where mnth_derived= 12 and mnth_derived_day in (25,31)
+group by mnth_derived_day
+),
+tbl3 as
+(
+select 'a' as a,round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)),2) as overall_avg_time
+from partition_orc_grp_task_nyc_taxi_data
+),
+tbl4 as
+(
+select aa.* ,b.overall_avg_time from tbl2 aa
+left join tbl3 b on aa.a=b.a
+),
+tbl5 as
+(
+select mnth_derived_day,round((special_avg_speed-overall_avg_time)/overall_avg_time,2 ) as percent_change from tbl4
+)
+select * from tbl5
+;
+
+--From the above code we can see that, on 25th Dec, there was 39% increase on average speed where as it 20% increase for 31st December
